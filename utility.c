@@ -1,5 +1,50 @@
 #include "utility.h"
 
+/*
+ * Gets the instruction pointed by IP, to the argument
+ * Return 0 on success
+ * Returns -1 on error after setting IP to exception handler
+ */
+int getInstruction(char *instruction)
+{
+	struct address translatedAddr;
+	int len;
+	bzero(instruction,WORD_SIZE * WORDS_PERINSTR);
+	if(getType(reg[IP_REG]) == TYPE_STR)
+	{	
+		exception("Illegal IP value. Not an address", EX_ILLMEM, 0);
+		return -1;
+	}
+	if(mode == USER_MODE && getType(reg[PTLR_REG]) == TYPE_STR)
+	{	
+		exception("Illegal PTLR value", EX_ILLMEM, 0);
+		return -1;
+	}
+	if(getInteger(reg[IP_REG])<0 || getInteger(reg[IP_REG]) + 1 >=SIZE_OF_MEM){			//checks if address is outside limits
+		exception("IP Register value out of bounds", EX_ILLMEM, 0);
+		return -1;
+	}
+	if(mode == USER_MODE){						//checks if address is outside limits if mode is user mode
+		if(getInteger(reg[IP_REG]) < 0 || getInteger(reg[IP_REG]) + 1 >= getInteger(reg[PTLR_REG]) * PAGE_SIZE) {
+			printf("%d", getInteger(reg[IP_REG]));
+			exception("Illegal IP access1", EX_ILLOPERAND, 0);
+			return -1;
+		}
+	}
+	translatedAddr = translate(getInteger(reg[IP_REG]));
+	if(translatedAddr.page_no == -1 && translatedAddr.word_no == -1)
+		return -1;
+	strcpy(instruction,page[translatedAddr.page_no].word[translatedAddr.word_no]);
+	translatedAddr = translate(getInteger(reg[IP_REG])+1);
+	if(translatedAddr.page_no == -1 && translatedAddr.word_no == -1)
+		return -1;
+	len = strlen(instruction);
+	instruction[len]=' ';
+	instruction[len+1]='\0';
+	strcat(instruction,page[translatedAddr.page_no].word[translatedAddr.word_no]);
+	return 0;
+}
+
 void emptyPage(int page_no) {
 	int i;
 	for(i = 0 ; i < PAGE_SIZE ; i++)
@@ -9,13 +54,16 @@ void emptyPage(int page_no) {
 }
 
 struct address translate (int virtual_addr) {
-	if(mode == USER_MODE) {
+	if(mode == USER_MODE)
+	{
 		struct address resultant_addr;
 		int page_entry;
+		resultant_addr.page_no = -1;
+		resultant_addr.word_no = -1;
 		if(getType(reg[PTBR_REG]) == TYPE_STR)
 		{	
-		    exception("Illegal Register value", EX_ILLMEM, 0);
-			return;
+			exception("Illegal Register value", EX_ILLMEM, 0);
+			return resultant_addr;
 		}
 		page_entry = getInteger(reg[PTBR_REG]) + (virtual_addr / PAGE_SIZE) * 2;
 		if(page[(page_entry+1) / PAGE_SIZE].word[(page_entry+1) % PAGE_SIZE][1] == VALID )
@@ -25,12 +73,7 @@ struct address translate (int virtual_addr) {
 			page[(page_entry+1) / PAGE_SIZE].word[(page_entry+1) % PAGE_SIZE][0] = REFERENCED;
 		}
 		else
-		{
-			resultant_addr.page_no = -1;
-			resultant_addr.word_no = -1;
-			exception("Page Fault", EX_PAGEFAULT, virtual_addr / PAGE_SIZE);			
-		}
-// 		printf("pg %d - wd %d \n", resultant_addr.page_no, resultant_addr.word_no); note: debugging
+			exception("Page Fault", EX_PAGEFAULT, virtual_addr / PAGE_SIZE);
 		return resultant_addr;
 	}
 	else
@@ -38,7 +81,6 @@ struct address translate (int virtual_addr) {
 		struct address resultant_addr;
 		resultant_addr.page_no = virtual_addr / PAGE_SIZE;
 		resultant_addr.word_no = virtual_addr % PAGE_SIZE;
-// 		printf("pg %d - wd %d \n", resultant_addr.page_no, resultant_addr.word_no); note:debugging
 		return resultant_addr;
 	}
 }
@@ -62,44 +104,14 @@ int getType(char* str)
 	return TYPE_INT;
 }
 
-void printRegisters() {
-	int i=0;
-	for(i=0;i<NUM_REGS;i++) {
-		switch(i) {
-			case BP_REG: 
-				printf("BP: %s\t",reg[BP_REG]);
-				break;
-			case SP_REG: 
-				printf("SP: %s\t",reg[SP_REG]);
-				break;
-			case IP_REG: 
-				printf("IP: %s\t",reg[IP_REG]);
-				break;
-			case PTBR_REG: 
-				printf("PTBR: %s\t",reg[PTBR_REG]);
-				break;
-			case PTLR_REG: 
-				printf("PTLR: %s\t",reg[PTLR_REG]);
-				break;
-			case EFR_REG: 
-				printf("EFR: %s\t",reg[EFR_REG]);
-				break;		
-			default: 
-				if(i<T0)
-					printf("R%d: %s\t",i,reg[i]);
-				else
-					printf("T%d: %s\t",i-T0,reg[i]);
-				break;
-		}
-	}
-	printf("\n");
-}
-
 void exception(char str[50], int ex_status, int fault_pageno) {
-	//if(ex_status != EX_PAGEFAULT)
-		printf("<ERROR:%d:%s> %s\n",getInteger(reg[IP_REG]),instruction, str);
 	if(mode == KERNEL_MODE)
+	{
+		printf("<ERROR:%d:%s> %s\n",getInteger(reg[IP_REG]),instruction, str);
+		if(db_mode == ENABLE)
+			debug_interface();
 		exit(0);
+	}
 	else
 	{
 		int ex_flag;

@@ -5,32 +5,70 @@
    note : -g for debug mode -d for disabling timer interrupt
 */
 main(int argc,char **argv){
-	int db_mode=0, intDisable=0;
+	int intDisable=0,flag_intValue;
+	initialize_debug();
 	if(argc >= 2)
 	{
-		if(strcmp(argv[1],"--debug") == 0 || strcmp(argv[1],"-g") == 0)
-			db_mode = 1;
-		else if(strcmp(argv[1], "--disable-timer") == 0 || strcmp(argv[1], "-d") == 0)
-			intDisable = 1;
+		if(strcmp(argv[1],"--debug") == 0 || strcmp(argv[1],"-d") == 0)
+			db_mode = ENABLE;
 		else
 		{
-			printf("Invalid arguement %s", argv[1]);
-			exit(0);
+			char *flag_name = strtok(argv[1], "=");	
+			char *flag_value = strtok(NULL, "=");
+			if(strcmp(flag_name, "--timer") == 0 || strcmp(flag_name, "-t") == 0)
+			{
+				flag_intValue = -1;
+				if(flag_value != NULL)
+					flag_intValue=getInteger(flag_value);
+				if(flag_intValue >= 1 && flag_intValue <= 1024)
+					TIMESLICE = flag_intValue;
+				else if(flag_intValue == 0)
+					intDisable = 1;
+				else
+				{
+					printf("Invalid arguement %d to timer flag. Timer value should be between 0 and 1024\n", flag_intValue);
+					exit(0);
+				}
+			}
+			else
+			{
+				printf("Invalid arguement %s", argv[1]);
+				exit(0);
+			}
 		}
 	}
 	if(argc == 3)
 	{
-		if(strcmp(argv[2],"--debug") == 0 || strcmp(argv[2],"-g") == 0)
-			db_mode = 1;
-		else if(strcmp(argv[2], "--disable-timer") == 0 || strcmp(argv[2], "-id") == 0)
-			intDisable = 1;
+		if(strcmp(argv[2],"--debug") == 0 || strcmp(argv[2],"-d") == 0)
+			db_mode = ENABLE;
 		else
 		{
-			printf("Invalid arguement %s", argv[2]);
-			exit(0);
+			char *flag_name = strtok(argv[2], "=");	
+			char *flag_value = strtok(NULL, "=");
+			if(strcmp(flag_name, "--timer") == 0 || strcmp(flag_name, "-t") == 0)
+			{
+				flag_intValue = -1;
+				if(flag_value != NULL)
+					flag_intValue=getInteger(flag_value);
+				if(flag_intValue >= 1 && flag_intValue <= 1024)
+					TIMESLICE = flag_intValue;
+				else if(flag_intValue == 0)
+					intDisable = 1;
+				else
+				{
+					printf("Invalid arguement %d to timer flag. Timer value should be between 0 and 1024\n", flag_intValue);
+					exit(0);
+				}
+			}
+			else
+			{
+				printf("Invalid arguement %s", argv[2]);
+				exit(0);
+			}
 		}
 	}
 	initializeRegs();  
+	time_counter = TIMESLICE;
 	run(db_mode, intDisable);	
 }
 
@@ -42,69 +80,30 @@ main(int argc,char **argv){
     2. Copies the instruction to be parsed as per the address specified by the IP register.
     3. Checks whether interrupt is disabled. If not th clock ticks.
     4. Begins the lexical analysis by getting the first token and passing it as arguement to Executeoneinstr.
-    5. Finally checks if time slice allocated is over or not. If yes and mode is user mode ,and if interrupt is enabled then
+    5. If step flag is enabled enters debug mode
+    6. Finally checks if time slice allocated is over or not. If yes and mode is user mode ,and if interrupt is enabled then
       INT 0 code is run.
 */
 void run(int db_mode, int intDisable) {
 	loadStartupCode();
-	int instr,len;
-	unsigned long long int tempCount=0;
-	while(1) {
-		struct address translatedAddr;
-		bzero(instruction,WORD_SIZE * WORDS_PERINSTR);
+	int instr;
+	while(1)
+	{
 		YY_FLUSH_BUFFER;
-		if(getType(reg[IP_REG]) == TYPE_STR)
-		{	
-		    exception("Illegal IP value. Not an address", EX_ILLMEM, 0);
-		    continue;
-		}
-		if(mode == USER_MODE && getType(reg[PTLR_REG]) == TYPE_STR)
-		{	
-		    exception("Illegal PTLR value", EX_ILLMEM, 0);
-		    continue;
-		}
-		if(getInteger(reg[IP_REG])<0 || getInteger(reg[IP_REG]) + 1 >=SIZE_OF_MEM){			//checks if address is outside limits
-		    exception("IP Register value out of bounds", EX_ILLMEM, 0);
-		    continue;
-		}
-		if(mode == USER_MODE){						//checks if address is outside limits if mode is user mode
-			if(getInteger(reg[IP_REG]) < 0 || getInteger(reg[IP_REG]) + 1 >= getInteger(reg[PTLR_REG]) * PAGE_SIZE) {
-				printf("%d", getInteger(reg[IP_REG]));
-				exception("Illegal IP access1", EX_ILLOPERAND, 0);
-				continue;
-			}
-		}
-		translatedAddr = translate(getInteger(reg[IP_REG]));
-		if(translatedAddr.page_no == -1 && translatedAddr.word_no == -1)
-			return;
-		strcpy(instruction,page[translatedAddr.page_no].word[translatedAddr.word_no]);
-		translatedAddr = translate(getInteger(reg[IP_REG])+1);
-		if(translatedAddr.page_no == -1 && translatedAddr.word_no == -1)
-			return;
-		len = strlen(instruction);
-		instruction[len]=' ';
-		instruction[len+1]='\0';
-		strcat(instruction,page[translatedAddr.page_no].word[translatedAddr.word_no]);
-//  		printf("%s\n", instruction); // note:debugging
-		translatedAddr.word_no = -1;
-		translatedAddr.page_no = -1;
+		if(getInstruction(instruction) == -1)		//gets the next instruction in variable instruction
+			continue;		
 		instr = yylex();
 		if(mode == USER_MODE && !intDisable) 
 			tick();
-		//tempCount1++;
 		Executeoneinstr(instr);
-		if(db_mode) {
-			printf("Values in registers after executing instruction :%s\n", instruction);
-			printRegisters();
-			printf("Press X to exit or any other key to continue.....\n");
-			char ch;
-			scanf("%c",&ch);
-			if(ch=='X' || ch=='x')
-				exit(0);
-		}
-		if(is_time_zero() && !intDisable && mode==USER_MODE) {
+		if( (watch_count > 0 && checkWatch() == ENABLE) || step_flag == ENABLE)
+			debug_interface();
+		if(is_time_zero() && !intDisable && mode==USER_MODE)
+		{
 			reset_timer();
 			runInt0Code();
+			if(step_flag == ENABLE)
+				printf("TIMER Interrupt\n");
 		}
 	}
 }
@@ -116,7 +115,7 @@ void run(int db_mode, int intDisable) {
 */
 void Executeoneinstr(int instr)
 {
-//	printf("\n%d:Enter:%s\n",getInteger(reg[IP_REG]),instruction);
+//	printf("\n%d:Enter:%s\n",getInteger(reg[IP_REG]),instruction); //Debugging
 	int opnd1,opnd2,flag1,flag12,flag2,flag22,oper,result, result2;
 	int opnd1Value;
 	int opnd2Value;
@@ -143,7 +142,7 @@ void Executeoneinstr(int instr)
 			bzero(string,16);
 			strcpy(string,yylval.data);
 			//printf("\n%d:MID:%s\nop1:%d\tfl1:%d\tfl2:%d\nop2:%d\tfl1:%d\tfl2:%d\n",getInteger(reg[IP_REG]),instruction,
-			//opnd1,flag1,flag12,opnd2,flag2,flag22);
+			//opnd1,flag1,flag12,opnd2,flag2,flag22); //Debugging
 			switch(flag2)
 			{
 				case REG:
@@ -993,7 +992,8 @@ void Executeoneinstr(int instr)
 			if(oper!= INR && oper!=DCR)
 			{
 				opnd2 = yylex();
-				switch(yylval.flag)
+				flag2 = yylval.flag;
+				switch(flag2)
 				{
 					case REG:
 						if(mode == USER_MODE && opnd2 >= NO_USER_REG)
@@ -1088,6 +1088,9 @@ void Executeoneinstr(int instr)
 						else
 							result2 = EFR_REG;
 						break;
+					case NUM:
+						result2 = opnd2;
+						break;
 					default:
 						exception("Illegal operand", EX_ILLOPERAND, 0);
 						return;					
@@ -1096,24 +1099,62 @@ void Executeoneinstr(int instr)
 			switch(oper)
 			{
 				case ADD:
-					storeInteger(reg[result],getInteger(reg[result]) + getInteger(reg[result2]));
+					if(flag2 == NUM)
+						storeInteger(reg[result],getInteger(reg[result]) + result2);
+					else
+						storeInteger(reg[result],getInteger(reg[result]) + getInteger(reg[result2]));
 					break;			
 				case SUB:
-					storeInteger(reg[result],getInteger(reg[result]) - getInteger(reg[result2]));
+					if(flag2 == NUM)
+						storeInteger(reg[result],getInteger(reg[result]) - result2);
+					else
+						storeInteger(reg[result],getInteger(reg[result]) - getInteger(reg[result2]));
 					break;
 				case MUL:
-					storeInteger(reg[result],getInteger(reg[result]) * getInteger(reg[result2]));
+					if(flag2 == NUM)
+						storeInteger(reg[result],getInteger(reg[result]) * result2);
+					else
+						storeInteger(reg[result],getInteger(reg[result]) * getInteger(reg[result2]));
 					break;
 				case DIV: 
-					if(getInteger(reg[result2]) == 0)
+					if(flag2 == NUM)
 					{
-						exception("Divide by ZERO", EX_ILLOPERAND, 0);
-						return;
+						if(result2 == 0)
+						{
+							exception("Divide by ZERO", EX_ILLOPERAND, 0);
+							return;
+						}
+						storeInteger(reg[result],getInteger(reg[result]) / result2);
 					}
-					storeInteger(reg[result],getInteger(reg[result]) / getInteger(reg[result2]));
+					else
+					{
+						if(getInteger(reg[result2]) == 0)
+						{
+							exception("Divide by ZERO", EX_ILLOPERAND, 0);
+							return;
+						}
+						storeInteger(reg[result],getInteger(reg[result]) / getInteger(reg[result2]));
+					}
 					break;
 				case MOD:
-					storeInteger(reg[result],getInteger(reg[result]) % getInteger(reg[result2]));
+					if(flag2 == NUM)
+					{
+						if(result2 == 0)
+						{
+							exception("Divide by ZERO", EX_ILLOPERAND, 0);
+							return;
+						}
+						storeInteger(reg[result],getInteger(reg[result]) % result2);
+					}
+					else
+					{
+						if(getInteger(reg[result2]) == 0)
+						{
+							exception("Divide by ZERO", EX_ILLOPERAND, 0);
+							return;
+						}
+						storeInteger(reg[result],getInteger(reg[result]) % getInteger(reg[result2]));
+					}
 					break;
 				case INR:
 					storeInteger(reg[result],getInteger(reg[result]) + 1);
@@ -1379,7 +1420,8 @@ void Executeoneinstr(int instr)
 						exception("Illegal address access", EX_ILLMEM, 0);
 						return;
 					}					
-					if(getType(reg[result]) == TYPE_INT && ((oper==JZ && getInteger(reg[result]) == 0) ||(oper==JNZ && getInteger(reg[result]) != 0)))
+					if( (getType(reg[result]) == TYPE_INT && oper==JZ && getInteger(reg[result]) == 0) 
+					|| (getType(reg[result]) == TYPE_STR || (oper==JNZ && getInteger(reg[result]) != 0)) )
 					{						
 						storeInteger(reg[IP_REG], opnd2);
 						
@@ -1716,7 +1758,7 @@ void Executeoneinstr(int instr)
 				return;
 			storeInteger(reg[SP_REG], getInteger(reg[SP_REG]) + 1);
 			storeInteger(page[translatedAddr.page_no].word[translatedAddr.word_no],getInteger(reg[IP_REG]) + WORDS_PERINSTR);
-			storeInteger(reg[IP_REG], (opnd1 + INT_START_PAGE) * PAGE_SIZE);
+			storeInteger(reg[IP_REG], ( (opnd1*PAGE_PER_INT) + INT_START_PAGE) * PAGE_SIZE);
 			mode = KERNEL_MODE;
 			break;
 		
@@ -1749,15 +1791,20 @@ void Executeoneinstr(int instr)
 			mode = USER_MODE;			
 			translatedAddr = translate(getInteger(reg[SP_REG]));
 			if(translatedAddr.page_no == -1 && translatedAddr.word_no == -1)
+			{
+				mode = KERNEL_MODE;
 				return;
+			}
 			else if(getType(page[translatedAddr.page_no].word[translatedAddr.word_no]) == TYPE_STR)
 			{
+				mode = KERNEL_MODE;
 				exception("Illegal return address", EX_ILLMEM, 0);
 				return;
 			}
 			result = getInteger(page[translatedAddr.page_no].word[translatedAddr.word_no]);
 			if(result < 0 || getType(reg[PTLR_REG]) == TYPE_STR || result >= getInteger(reg[PTLR_REG]) * PAGE_SIZE)
 			{
+				mode = KERNEL_MODE;
 				exception("Illegal return address", EX_ILLMEM, 0);
 				return;
 			}
@@ -1819,6 +1866,7 @@ void Executeoneinstr(int instr)
 			}
 			char input[WORD_SIZE];
 			scanf("%s",input);
+			FLUSH_STDIN(input);    // strip newline, flush extra chars
 			input[WORD_SIZE-1] = '\0';
 			strcpy(reg[result], input);
 			storeInteger(reg[IP_REG],getInteger(reg[IP_REG])+WORDS_PERINSTR);
@@ -1889,6 +1937,7 @@ void Executeoneinstr(int instr)
 					return;					
 			}
 			printf("%s\n",reg[result]);
+			fflush(stdout);
 			storeInteger(reg[IP_REG],getInteger(reg[IP_REG])+WORDS_PERINSTR);
 			break;
 		case LOAD:
@@ -2108,8 +2157,11 @@ void Executeoneinstr(int instr)
 					return;
 					break;
 			}
-			if(instr == LOAD)			
+			if(instr == LOAD)
+			{			
+				emptyPage(result);
 				readFromDisk(result, result2);
+			}
 			else if(instr == STORE)
 				writeToDisk(result2, result);
 			storeInteger(reg[IP_REG],getInteger(reg[IP_REG])+WORDS_PERINSTR);
@@ -2121,29 +2173,22 @@ void Executeoneinstr(int instr)
 			  	exception("Call to Privileged Instruction HALT in USER mode", EX_ILLINSTR, 0);
 				return;
 			}
-			printf("OVER!!!!!!!!\n");
 			printf("Machine is halting\n");
 			exit(0);
 			break;			
 		case END:
-			printf("Machine is exiting\n");
 			break;
 		
 		case BRKP:
-			printf("Values in registers after executing instruction :%s\n", instruction);
-			printRegisters();
-			printf("Press X to exit or any other key to continue.....\n");
-			char ch;
-			scanf("%c",&ch);
-			if(ch=='X' || ch=='x')
-				exit(0);
-			else
-				storeInteger(reg[IP_REG],getInteger(reg[IP_REG])+WORDS_PERINSTR);
+			if(db_mode == ENABLE)
+			{
+				step_flag = ENABLE;
+				printf("\nXSM Debug Environment\nType \"help\" for  getting a list of commands\n");
+			}
+			storeInteger(reg[IP_REG],getInteger(reg[IP_REG])+WORDS_PERINSTR);
 			break;
 		default:
 			exception("Illegal instruction\n", EX_ILLINSTR, 0);
 			return;
 	}
-	
-	//printf("\n%d:Exit:%s\n",getInteger(reg[IP_REG]),instruction);
 }
